@@ -1,0 +1,40 @@
+{
+  "name": "lunchbot",
+  "version": "1.0.0",
+  "description": "Slack bot for agile, scalable lunch managment in the CLOUD",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "npm run start:dev",
+    "start:dev": "nodemon src/index.js",
+    "lint": "eslint 'src/**.js'",
+    "lint:fix": "eslint 'src/**.js' --fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USA-RedDragon/lunchbot.git"
+  },
+  "keywords": [
+    "slack",
+    "bot"
+  ],
+  "author": "Jacob McSwain",
+  "license": "GPL-2.0-only",
+  "bugs": {
+    "url": "https://github.com/USA-RedDragon/lunchbot/issues"
+  },
+  "homepage": "https://github.com/USA-RedDragon/lunchbot#readme",
+  "dependencies": {
+    "axios": "^0.18.0",
+    "body-parser": "^1.18.3",
+    "esm": "^3.2.21",
+    "express": "^4.16.4",
+    "morgan": "^1.9.1",
+    "redis": "^2.8.0",
+    "uuid": "^3.3.2"
+  },
+  "devDependencies": {
+    "eslint": "^5.13.0",
+    "eslint-config-google": "^0.12.0",
+    "nodemon": "^1.18.9"
+  }
+}
