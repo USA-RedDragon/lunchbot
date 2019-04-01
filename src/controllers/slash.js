@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { createClient } from 'redis';
-import { v4 } from 'uuid';
+import uuid from 'uuid/v4';
+import _ from 'lodash';
 const redis = createClient();
 
 const lunchOptions = [
@@ -16,78 +17,62 @@ const lunchOptions = [
     'Pizza 23',
 ];
 
-const postSlashLunch = (req, res) => {
-    const pollId = v4();
+export async function postSlashLunch(req, res) {
+    const pollId = uuid();
     const poll = buildPoll(lunchOptions, pollId);
-    redis.set(pollId, JSON.stringify(poll));
+
+    await set(pollId, poll);
     res.json({
         response_type: 'in_channel',
         blocks: poll,
     });
 };
 
-const postSlashVote = async (req, res) => {
+export async function postSlashVote(req, res) {
     const payload = JSON.parse(req.body.payload);
-    console.log(payload.message.blocks);
-    const poll = await updatePoll(payload.actions[0].block_id, payload.actions[0].value, payload.user);
-    axios.post(payload.response_url, { replace_original: true, blocks: poll }).catch((err) => {
-        console.error(err);
-    });
+    const { block_id } = payload.actions[0];
+    const { pollId, buttonId } = parseIds(block_id);
+
+    await updateUserSelection(pollId, buttonId, payload.user);
+    const poll = await refreshPoll(pollId);
+
+    await axios.post(payload.response_url, { replace_original: true, blocks: poll });
+
     res.sendStatus(204);
 };
 
-const updatePoll = function(blockId, action, user) {
-    return new Promise((resolve, reject) => {
-        redis.get(blockId, async (err, poll) => {
-            if (err) {
-                reject(err);
-            } else {
-                let modifiedPoll = JSON.parse(poll);
-                const buttons = [];
-                modifiedPoll.forEach((section, index, obj) => {
-                    if (section.block_id === blockId) {
-                        buttons.push(section);
-                        obj.splice(index, 1);
-                    }
-                });
-                console.log(buttons);
-                modifiedPoll = modifiedPoll.concat(await Promise.all(buttons.map((button, index) => {
-                    return new Promise((resolve, reject) => {
-                        if (button.accessory.value === action) {
-                            let userResults = {};
-                            redis.get(`${blockId}_polls`, (err, results) => {
-                                if (err) {
-                                    console.error(err);
-                                } else if (!!results) {
-                                    userResults = Object.assign(
-                                        JSON.parse(results),
-                                        { [user.id]: action }
-                                    );
-                                    // DO the things with userResults and updating poll
-                                    redis.set(`${blockId}_polls`, JSON.stringify(userResults));
-                                    button.text.text += ` <@${user.id}>`;
-                                } else if (!results) {
-                                    userResults = { [user.id]: action };
-                                    redis.set(`${blockId}_polls`, JSON.stringify(userResults));
-                                    button.text.text += ` <@${user.id}>`;
-                                }
-                                resolve(button);
-                            });
-                        }
-                    });
-                })));
+async function updateUserSelection(pollId, buttonId, user) {
+    const userSelection = await get(`${pollId}_userSelection`);
+    _.set(userSelection, user.id, buttonId);
+    await set(`${pollId}_userSelection`, userSelection);
+}
 
-                console.log('after');
-                console.log(modifiedPoll);
-                redis.set(blockId, JSON.stringify(modifiedPoll));
-                resolve(modifiedPoll);
-            }
-        });
+async function refreshPoll(pollId) {
+    const poll = await get(pollId);
+    const userSelection = await get(`${pollId}_userSelection`);
+    const mappedUserSelection = _.reduce(userSelection, (acc, selection, user) => {
+        if (!acc[selection]) acc[selection] = [];
+        acc[selection].push(user);
+
+        return acc;
+    }, {});
+
+    return poll.map(pollItem => {
+        if (!pollItem.accessory || pollItem.accessory.type !== 'button') return pollItem;
+
+        const { buttonId } = parseIds(pollItem.block_id);
+        if (mappedUserSelection[buttonId]) {
+            pollItem.text.text = mappedUserSelection[buttonId]
+                .map((user) => `<@${user}>`)
+                .join(',');
+        }
+
+        return pollItem;
     });
-};
+}
 
-const buildPoll = function(options, blockId) {
-    const poll = [
+function buildPoll(options, pollId) {
+    return [
         {
             'type': 'section',
             'text': {
@@ -117,7 +102,7 @@ const buildPoll = function(options, blockId) {
         // Buttons
         {
             'type': 'section',
-            'block_id': blockId,
+            'block_id': `${pollId}:${uuid()}`,
             'text': {
                 'type': 'mrkdwn',
                 'text': 'No votes',
@@ -133,6 +118,7 @@ const buildPoll = function(options, blockId) {
         },
         {
             'type': 'section',
+            'block_id': `${pollId}:${uuid()}`,
             'text': {
                 'type': 'mrkdwn',
                 'text': 'No votes',
@@ -147,7 +133,36 @@ const buildPoll = function(options, blockId) {
             },
         },
     ];
-    return poll;
 };
 
-export { postSlashLunch, postSlashVote };
+function parseIds(blockId) {
+    const parsed = blockId.match(/^(.+):(.+)$/i);
+    if (!parsed) throw new Error('Couldn\'t parse ids');
+
+    return {
+        pollId: parsed[1],
+        buttonId: parsed[2],
+    };
+}
+
+async function get(id, defaultValue = {}) {
+    const value = await new Promise((resolve, reject) => {
+        redis.get(id, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        });
+    });
+
+    return value ? JSON.parse(value) : defaultValue;
+}
+
+async function set(id, value) {
+    value = JSON.stringify(value);
+
+    return new Promise((resolve, reject) => {
+        redis.set(id, value, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        });
+    });
+}
