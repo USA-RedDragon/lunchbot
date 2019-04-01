@@ -43,7 +43,11 @@ export async function postSlashVote(req, res) {
 
 async function updateUserSelection(pollId, buttonId, user) {
     const userSelection = await get(`${pollId}_userSelection`);
-    _.set(userSelection, user.id, buttonId);
+    if (userSelection[user.id] && userSelection[user.id] === buttonId) {
+        _.unset(userSelection, user.id);
+    } else {
+        _.set(userSelection, user.id, buttonId);
+    }
     await set(`${pollId}_userSelection`, userSelection);
 }
 
