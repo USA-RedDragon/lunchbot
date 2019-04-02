@@ -4,7 +4,7 @@
   "description": "Slack bot for agile, scalable lunch managment in the CLOUD",
   "main": "src/index.js",
   "scripts": {
-    "start": "npm run start:dev",
+    "start": "npm run start:prod",
     "start:dev": "nodemon src/index.js",
     "start:prod": "node src/index.js",
     "lint": "eslint 'src/**.js'",

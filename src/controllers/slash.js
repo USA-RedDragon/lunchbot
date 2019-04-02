@@ -7,7 +7,7 @@ const maps = require('@google/maps').createClient({
     key: process.env.MAPS_API_KEY,
 });
 
-const redis = createClient();
+const redis = createClient(process.env.REDIS_URL);
 
 export async function postSlashLunch(req, res) {
     const pollId = uuid();
