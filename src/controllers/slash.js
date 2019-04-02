@@ -2,36 +2,34 @@ import axios from 'axios';
 import { createClient } from 'redis';
 import uuid from 'uuid/v4';
 import _ from 'lodash';
-const redis = createClient();
 
-const lunchOptions = [
-    'Sunnyside',
-    'Tuckers',
-    '1492',
-    'Hobbys Hoagies',
-    'Neptunes',
-    'Fassler Hall',
-    'Waffle Champion',
-    'Sala Thai',
-    'Backdoor BBQ',
-    'Pizza 23',
-];
+const maps = require('@google/maps').createClient({
+    key: process.env.MAPS_API_KEY,
+});
+
+const redis = createClient();
 
 export async function postSlashLunch(req, res) {
     const pollId = uuid();
-    const poll = buildPoll(lunchOptions, pollId);
-
-    await set(pollId, poll);
-    res.json({
-        response_type: 'in_channel',
-        blocks: poll,
+    getLocationCoords(req.body.text || 'Clevyr, Inc').then((coords) => {
+        getRestaurants(coords).then((lunchOptions) => {
+            const poll = buildPoll(lunchOptions, pollId);
+            set(pollId, poll);
+            res.json({
+                response_type: 'in_channel',
+                blocks: poll,
+            });
+        });
+    }).catch((err) => {
+        console.error(err);
+        res.sendStatus(400);
     });
 };
 
 export async function postSlashVote(req, res) {
     const payload = JSON.parse(req.body.payload);
-    const { block_id } = payload.actions[0];
-    const { pollId, buttonId } = parseIds(block_id);
+    const blockId = payload.actions[0].block_id;
+    const { pollId, buttonId } = parseIds(blockId);
 
     await updateUserSelection(pollId, buttonId, payload.user);
     const poll = await refreshPoll(pollId);
@@ -40,6 +38,47 @@ export async function postSlashVote(req, res) {
 
     res.sendStatus(204);
 };
+
+function getLocationCoords(location) {
+    return new Promise((resolve, reject) => {
+        maps.geocode({ address: location }, (err, response) => {
+            if (err) {
+                console.error(err);
+                reject(err);
+            }
+            resolve(response.json.results[0].geometry.location);
+        });
+    });
+}
+
+function getRestaurants(coords) {
+    return new Promise((resolve, reject) => {
+        maps.placesNearby(
+            { location: coords, type: 'restaurant', opennow: true, rankby: 'distance' },
+            (err, response) => {
+                if (err) {
+                    console.error(err);
+                    reject(err);
+                }
+                resolve(response.json.results);
+            });
+    });
+}
+
+function getPlacePhoto(photoReference) {
+    return new Promise((resolve, reject) => {
+        reject(new Error('ENOENT: Not yet implemented'));
+        return;
+        maps.placesPhoto({ photoreference: photoReference }, (err, response) => {
+            if (err) {
+                console.error(err);
+                reject(err);
+            }
+            console.log(response);
+            resolve(response.json.results);
+        });
+    });
+}
 
 async function updateUserSelection(pollId, buttonId, user) {
     const userSelection = await get(`${pollId}_userSelection`);
@@ -61,14 +100,14 @@ async function refreshPoll(pollId) {
         return acc;
     }, {});
 
-    return poll.map(pollItem => {
+    return poll.map((pollItem) => {
         if (!pollItem.accessory || pollItem.accessory.type !== 'button') return pollItem;
 
         const { buttonId } = parseIds(pollItem.block_id);
         if (mappedUserSelection[buttonId]) {
             pollItem.text.text = mappedUserSelection[buttonId]
                 .map((user) => `<@${user}>`)
-                .join(',');
+                .join(', ');
         }
 
         return pollItem;
@@ -76,67 +115,68 @@ async function refreshPoll(pollId) {
 }
 
 function buildPoll(options, pollId) {
-    return [
-        {
-            'type': 'section',
-            'text': {
-                'type': 'mrkdwn',
-                'text': 'Where should we eat lunch?\n\n *Please select a restaurant:*',
+    const restaurantMeta = [];
+    const buttonMeta = [];
+    options.forEach(async (item) => {
+        const hasPhoto = false; // !!item.photos;
+        let photo = null;
+        if (hasPhoto) {
+            photo = getPlacePhoto(item.photos[0].photo_reference).then((retrievedPhoto) => {
+                photo = retrievedPhoto;
+            }).catch((err) => {
+                console.error(err);
+            });
+        }
+        const restaurantObject = {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: `*${item.name}*\n` +
+                    `${item.rating} Stars ` +
+                    `${':star:'.repeat(Math.floor(item.rating))} ${item.user_ratings_total} reviews`,
             },
-        },
-        {
-            'type': 'divider',
-        },
-        // Restaurants
-        {
-            'type': 'section',
-            'text': {
-                'type': 'mrkdwn',
-                'text': '*Sunnyside Diner*\n4.4 Stars :star::star::star::star: 939 reviews\n Upbeat place for area-sourced, homemade comfort food like blueberry pancakes & meatloaf sandwiches.',
+        };
+        if (hasPhoto && photo) {
+            restaurantObject.accessory = {
+                type: 'image',
+                image_url: photo,
+                alt_text: 'alt text for image',
+            };
+        }
+        restaurantMeta.push(restaurantObject);
+        buttonMeta.push({
+            type: 'section',
+            block_id: `${pollId}:${uuid()}`,
+            text: {
+                type: 'mrkdwn',
+                text: 'No votes',
             },
-            'accessory': {
-                'type': 'image',
-                'image_url': 'https://lh5.googleusercontent.com/p/AF1QipNWlKxCQ-7uGggj5lm8CwjgYZlh4rortMbVj1TT=w284-h160-k-no',
-                'alt_text': 'alt text for image',
-            },
-        },
-        {
-            'type': 'divider',
-        },
-        // Buttons
-        {
-            'type': 'section',
-            'block_id': `${pollId}:${uuid()}`,
-            'text': {
-                'type': 'mrkdwn',
-                'text': 'No votes',
-            },
-            'accessory': {
-                'type': 'button',
-                'text': {
-                    'type': 'plain_text',
-                    'text': 'Sunnyside Diner',
+            accessory: {
+                type: 'button',
+                text: {
+                    type: 'plain_text',
+                    text: item.name,
                 },
-                'value': 'sunnyside_diner',
+                value: item.name,
+            },
+        });
+    });
+    let blocks = [
+        {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: 'Where should we eat lunch?\n\n *Please select a restaurant:*',
             },
         },
         {
-            'type': 'section',
-            'block_id': `${pollId}:${uuid()}`,
-            'text': {
-                'type': 'mrkdwn',
-                'text': 'No votes',
-            },
-            'accessory': {
-                'type': 'button',
-                'text': {
-                    'type': 'plain_text',
-                    'text': 'Sunnyside Diner 2.0',
-                },
-                'value': 'sunnyside_diner_20',
-            },
-        },
-    ];
+            type: 'divider',
+        }];
+    blocks = blocks.concat(restaurantMeta);
+    blocks.push({
+        type: 'divider',
+    });
+    return blocks.concat(buttonMeta);
 };
 
 function parseIds(blockId) {
